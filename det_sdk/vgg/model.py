@@ -207,6 +207,8 @@ class VGG_OFFICIAL(nn.Module):
         for v in vgg_cfgs[type]:
             if v == "M":
                 layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            elif v == "C":
+                layers += [nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True)]
             else:
                 conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
                 if batch_norm:
@@ -216,6 +218,17 @@ class VGG_OFFICIAL(nn.Module):
                 in_channels = v
 
         return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.features(x)
+        print("ft shape:",x.shape)
+        x = self.avgpool(x)
+        print("avg shape:",x.shape)
+        x = torch.flatten(x, 1)
+        print("flatten shape:",x.shape)
+        x = self.classifier(x)
+        print("classifier shape:",x.shape)
+        return x
 
 
 def print_model(model):
@@ -252,7 +265,15 @@ def vgg16(pretrained = False):
 
 if __name__ == "__main__":
     m = GlobalBackbones().get_backbone("vgg16_official", pretrained=True)
-    print(m)
+    mat = torch.randn(1, 3, 300, 300)
+    #print(m)
+    # no.22 should be layer 4_3: 38 * 38 * 512
+    ft = m.features[:23]
+    print("total feature length:", len(ft))
+    
+    out =  ft(mat)
+    print("feature out shape")
+    print(out.shape)
     #model = VGG16_CF()
     #print_model(model)
     

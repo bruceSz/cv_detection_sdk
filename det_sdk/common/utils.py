@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from PIL import Image
 import os
+from torch import nn
 
 def pool_nms(hm, kernel=3):
     pad = (kernel - 1) // 2
@@ -58,6 +59,16 @@ class MyTime(object):
         curr = time.time()
         print("elapsed time: ", curr - self.start)
         self.start = None
+
+
+def modules_init(modules):
+    for m in modules:
+        if isinstance(m, nn.Conv2d):
+            n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            m.weight.data.normal_(0, np.sqrt(2. / n))
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
 
 
 def weights_init(net, init_type='normal', init_gain=0.02):

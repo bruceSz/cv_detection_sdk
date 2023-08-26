@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 
-
+import torch
 from torch import nn
 import math
 from torch.hub import load_state_dict_from_url
+from det_sdk.backbones.backbone_mgr import GlobalBackbones
 
 model_urls = {
     'resnet18': 'https://s3.amazonaws.com/pytorch/models/resnet18-5c106cde.pth',
@@ -13,6 +14,46 @@ model_urls = {
     'resnet152': 'https://s3.amazonaws.com/pytorch/models/resnet152-b121ed2d.pth',
 }
 
+class BasicBlock(nn.Module):
+    expansion = 1
+    def __init__(self, inplanes, planes, stride=1,
+                 downsample=None, groups=1,basewidth=64,
+                 dilation=1, norm_layer=None):
+        super(BasicBlock, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        if groups != 1 or basewidth != 64:
+            raise ValueError('BasicBlock only supports groups=1 and base_width=64')
+        
+        if dilation > 1:
+            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
+        
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, bias=False,
+                               padding = dilation, groups=groups)
+
+        self.bn1 = norm_layer(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, bias=False,
+                               padding = dilation, groups=groups)
+        self.bn2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x):
+        ident = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            ident = self.downsample(x)
+        out += ident
+        out = self.relu(out)
+        return out
 
 class BottleNeck(nn.Module):
     expansion = 4
@@ -60,7 +101,7 @@ class ResNet(nn.Module):
     """
         refer: https://blog.csdn.net/zjc910997316/article/details/102912175
     """
-    def __init__(self, block, layers, num_classes=100):
+    def __init__(self, block, layers, num_classes=1000):
         self.inplanes = 64
         super(ResNet, self).__init__()
         # h, w, c-> h/2, w/2, 64, etc:
@@ -137,6 +178,53 @@ class ResNet(nn.Module):
         x = self.fc(x)
         return x
 
+
+
+def resnet18(pretrained=False, **kwargs):
+    model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    if pretrained:
+        state_dict= load_state_dict_from_url(model_urls['resnet18'], model_dir = "model_data/")
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
+@GlobalBackbones().RegisterBackbone
+class RESNET_18_FT(nn.Module):
+    __BACKBONE__ = "resnet18"
+    WEIGHT_URL = "https://s3.amazonaws.com/pytorch/models/resnet18-5c106cde.pth"
+
+    def __init__(self, *args, **kwargs) -> None:
+        super(RESNET_18_FT, self).__init__(*args, **kwargs)
+        
+        res18_m = resnet18(pretrained=True)
+        #del res18_m.avgpool
+        #del res18_m.fc
+        self.ft_layer = res18_m
+        features = [self.ft_layer.conv1, self.ft_layer.bn1, self.ft_layer.relu,
+              self.ft_layer.maxpool, self.ft_layer.layer1, 
+              self.ft_layer.layer2, self.ft_layer.layer3, 
+              self.ft_layer.layer4]
+        self.base_ft = nn.Sequential(*features[:5])
+        
+        self.features = nn.Sequential(*features)
+
+    def forward(self, x):
+        #x = self.features(x)
+        x = self.base_ft(x)
+        ft1 = self.ft_layer.layer2(x)
+        ft2 = self.ft_layer.layer3(ft1)
+        ft3 = self.ft_layer.layer4(ft2)
+        return ft1, ft2, ft3
+
+
+
+
+def resnet34(pretrained=False, **kwargs):
+    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        state_dict  = load_state_dict_from_url(model_urls['resnet34'], model_dir = "model_data/", strict=False)
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
 def resnet50(pretrained = False):
     model = ResNet(BottleNeck, [3, 4, 6, 3])
     if pretrained:
@@ -148,3 +236,36 @@ def resnet50(pretrained = False):
     features = list([model.conv1, model.bn1, model.relu, model.maxpool, model.layer1, model.layer2, model.layer3, model.layer4])
     features = nn.Sequential(*features)
     return features
+
+
+def resnet101(pretrained=False, **kwargs):
+    model = ResNet(BottleNeck, [3, 4, 23, 3], **kwargs)
+    if pretrained:
+        state_dict = load_state_dict_from_url(model_urls['resnet101'], model_dir = "model_data/")
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def resnet152(pretrained=False, **kwargs):
+    model = ResNet(BottleNeck, [3, 8, 36, 3], **kwargs)
+    if pretrained:
+        state_dict = load_state_dict_from_url(model_urls['resnet152'], model_dir = "model_data/")
+        model.load_state_dict(state_dict, strict=False)
+    return model
+
+
+def main():
+    m = GlobalBackbones().get_backbone("resnet18", pretrained=True)
+    mat = torch.randn(1, 3, 300, 300)
+    #print(m._modules["ft_layer"]._modules.keys())
+    out = m(mat)
+    print(out.shape)
+    # no.22 should be layer 4_3: 38 * 38 * 512
+    #out =  m(mat)
+    #print("feature out shape")
+    #print(out.shape)
+    
+
+
+if __name__ == "__main__":
+    main()

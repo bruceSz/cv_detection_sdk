@@ -23,6 +23,8 @@ class GlobalBackbones(object):
 
         return backbone_cls
 
+
+
     def get_backbone(self, backbone_name, pretrained=False):
         print("get backbone: ", backbone_name)
         print("registered backbones: ", self.backbones.keys())
@@ -36,7 +38,7 @@ class GlobalBackbones(object):
                 state_dict = load_state_dict_from_url(url, model_dir = 'model_data/')
                 #print(state_dict.keys())
                 
-                model.load_state_dict(state_dict)    
+                model.load_state_dict(state_dict, strict=False)    
             else:
                 print("not pretrained return raw model")
             return model
