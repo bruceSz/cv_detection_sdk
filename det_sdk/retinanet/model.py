@@ -7,6 +7,7 @@ from backbones.backbone_mgr import GlobalBackbones
 from common.utils import modules_init
 import colorsys
 
+from anchors import Anchors
 
 class RegressionHead(nn.Module):
     def __init__(self, ft_size, n_anchors = 9, out_ft=256) -> None:
