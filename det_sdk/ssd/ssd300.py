@@ -21,7 +21,7 @@ class VGG_FT_HEAD(nn.Module):
             nn.ReLU(inplace=True), self.conv2, nn.ReLU(inplace=True)
         ]
 
-        self
+        
 
 
         
