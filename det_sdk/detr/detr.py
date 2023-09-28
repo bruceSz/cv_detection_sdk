@@ -7,8 +7,12 @@ import torch.nn.functional as F
 import torchvision
 from torch import Tensor
 from typing import List
+from backbones.backbone_mgr import GlobalBackbones
 
+from trans import Transformer
 from misc import _onnx_nested_tensor_from_tensor_list
+from segm import MHAttentionMap
+from segm import MaskHeadSmallConv
 
 class Joiner(nn.Sequential):
 
@@ -133,10 +137,86 @@ class DETR(nn.Module):
             "pred_boxes": b
         } for a, b  in zip(out_class[:-1], out_coord[:-1])]
     
+class DETRsegm(nn.Module):
+    def __init__(self, detr, freeze_detr = False):
+        super(DETRsegm, self).__init__()
+        self.detr = detr
+        if freeze_detr:
+            for p in self.parameters():
+                p.requires_grad_(False)
+        hidden_dim, heads = detr.transformer.d_model, detr.transformer.heads
+        self.bbox_attn = MHAttentionMap(hidden_dim, hidden_dim, heads, drop=0.0)
+        self.mask_head = MaskHeadSmallConv(hidden_dim + heads,[ 1024, 512, 256], hidden_dim )
+
+    def forward(self, samples: NestedTensor):
+        if isinstance(samples, (list, torch.Tensor)):
+            samples = nested_tensor_from_tensor_list(samples)
+        feats , pos = self.detr.backbone(samples)
+
+        bs = feats[-1].tensors.shape[0]
+        src, mask = feats[-1].decompose()
+
+        assert(mask is not None)
+
+        src_proj  = self.detr.input_proj(src)
+
+        hs, memory = self.detr.transformer(src_proj, mask, self.detr.query_emb.weight,pos[-1])
+
+        outputs_class = self.detr.class_emb(hs)
+        outputs_coord = self.detr.bbox_emb(hs).sigmoid()
+
+        out = {
+            "pred_logits": outputs_class[-1],
+            "pred_boxes": outputs_coord[-1],
+        }
+        if self.detr.aux_loss:
+            out["aux_outputs"] = self.detr._set_aux_loss(outputs_class, outputs_coord)
+
+        bbox_mask = self.bbox_attn(hs[-1], memory, mask)
+
+        seg_masks = self.mask_head(src_proj, bbox_mask, [feats[2].tensors, 
+                                                         feats[1].tensors, 
+                                                         feats[0].tensors])
+        
+        out_seg_masks = seg_masks.view(bs, self.detr.n_queries, seg_masks.shape[-2], seg_masks[-1])
+        out["pred_masks"] = out_seg_masks
+
+        return out
+
+
+def parser_args():
+    import argparse
+    parser = argparse.ArgumentParser('DETR training and evaluation script')
+    parser.add_argument('--dataset_file', default='coco', help='dataset name')
+    parser.add_argument('--backbone_name', default='resnet50', help='backbone_name')
+    parser.add_argument('--device', default='cuda', help='device')
+    parser.add_argument('--num_queries', default=100, type=int, help='number of queries')
+    parser.add_argument('--pretrained', default=False, action="store_true", help='whether to use pretrained backbone')
+    parser.add_argument('--aux_loss', default=True, action="store_true", help='whether to use auxiliary decoding losses')
+    parser.add_argument('--hidden_dim', default=512, type=int, help='hidden dimension(transformer_encoder_out_dim)')
+    parser.add_argument('--dropout', default=0.1, type=float, help='dropout')
+    parser.add_argument('--nheads', default=8, type=int, help='number of heads in transformer')
+    parser.add_argument('--dim_feedforward', default=2048, type=int, help='dim_feedforward in transformer')
+    parser.add_argument('--enc_layers', default=6, type=int, help='number of encoder layers')
+    parser.add_argument('--dec_layers', default=6, type=int, help='number of decoder layers')
+    parser.add_argument('--normalize_before', default=False, action="store_true", help='whether to use normalize_before in transformer')
+    parser.add_argument('--return_intermediate_dec', default=False, action="store_true", help='whether to return intermediate decoder layers')
+    args = parser.parse_args()
+    return args
+
 def build_backbone(args):
-    xxx = 1
+    backbone = GlobalBackbones.get_backbone(args.backbone_name, pretrained=args.pretrained)
+    return backbone
 
 def build_transformer(args):
+    return Transformer(d_model = args.hidden_dim,
+                       dropout=args.dropout,
+                       heads = args.nheads,
+                       dim_forward=args.dim_feedforward,
+                       num_encoder=args.enc_layers,
+                       num_decoder=args.dec_layers,
+                       normalize= args.normalize_before,
+                       return_intermediate_dec=args.return_intermediate_dec)
 
 
 def build(args):
@@ -151,6 +231,8 @@ def build(args):
     model = DETR(backbone, transformer, n_class, args.num_queries, aux_loss = args.aux_loss)
     if args.masks:
         model = DETRsegm(model, freeze_detr = (args.freeze_detr is not None) )
+
+    #TODO.
     matcher = build_matcher(args)
     weight_dict = {"loss_ce": 1, "loos_box": args.bbox_loss_coef}
     weight_dict["loss_giou"] = args.giou_loss_coef
