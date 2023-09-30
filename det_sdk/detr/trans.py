@@ -3,10 +3,25 @@
 from torch import nn
 from typing import Optional, List
 from torch import Tensor
+import torch.nn.functional as F
+
+def _get_act_fn(act):
+    """
+    Return an act according to input string
+    """
+    act_map = {
+         "relu": F.relu,
+         "gelu": F.gelu,
+         "glu": F.glu
+    }
+    if not act in act_map:
+        raise ValueError("act must be one of {}".format(act_map.keys()))
+    else:
+        return act_map[act]
 
 class TransformerEncoder(nn.Module):
     def __init__(self, d_model,heads, dim_forward=2048, dropout = 0.1,
-                 act='relu', normalize): 
+                 act='relu', normalize=False): 
         super(TransformerEncoder, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, heads, dropout=dropout)
         self.liear1 = nn.Linear(d_model, dim_forward)
