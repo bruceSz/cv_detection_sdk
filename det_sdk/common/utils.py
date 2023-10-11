@@ -7,6 +7,18 @@ from PIL import Image
 import os
 from torch import nn
 
+def check_version(version, target_version, name= "version", pinned = False, hard= False,
+                  verbose=False):
+    curr , minimum = (pkg.parse_version(version) for pkg in [version, target_version])
+    res = (curr == minimum) if pinned else (curr >= minimum)
+    s = f'WARNNING {name} {minimum} is required by {name} {curr} is provided'.format(name=name, minimum=minimum)
+    if hard:
+        assert res, s
+    else:
+        if not res and verbose:
+            print(s)
+    return res
+
 def pool_nms(hm, kernel=3):
     pad = (kernel - 1) // 2
     # n, c, h, w
